@@ -2,7 +2,6 @@
 shap_rtl.explainer
 ──────────────────
 RTL-aware SHAP explanation generation with LLM-powered feature analysis.
-Supports: Arabic, Urdu, Persian, Hebrew
 """
 
 import os
@@ -20,12 +19,18 @@ from bidi.algorithm import get_display
 # SHAP and visualization
 import shap
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib import font_manager
 
 # LLM integration
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
+
+# Import RTL font utilities
+from shap_rtl.rtl_utils import (
+    _find_rtl_font, 
+    set_rtl_font_path, 
+    set_current_language,
+    get_current_language
+)
 
 load_dotenv()
 
@@ -42,36 +47,19 @@ class RTLSHAPExplainer:
     """
     
     SUPPORTED_LANGUAGES = ["Arabic", "Urdu", "Persian", "Hebrew"]
+    RTL_LANGUAGES = SUPPORTED_LANGUAGES
     
     def __init__(
         self,
-        language: str = "Urdu",
+        language: str,
         model=None,
         vectorizer=None,
         api_type: str = "groq",
         skip_translation: bool = False,
-        max_features_to_translate: int = 50,
-        custom_font_path: str = None
+        max_features_to_translate: int = 50
     ):
         """
         Initialize RTL SHAP explainer.
-        
-        Parameters
-        ----------
-        language : str
-            RTL language (Arabic, Urdu, Persian, Hebrew)
-        model : object, optional
-            ML model for SHAP
-        vectorizer : object, optional
-            Text vectorizer
-        api_type : str
-            LLM API type ("groq" or "github")
-        skip_translation : bool
-            Skip all LLM translations for faster execution
-        max_features_to_translate : int
-            Maximum features to translate (to save API costs)
-        custom_font_path : str, optional
-            Path to custom RTL font file
         """
         if language not in self.SUPPORTED_LANGUAGES:
             raise ValueError(
@@ -87,44 +75,45 @@ class RTLSHAPExplainer:
         self.max_features_to_translate = max_features_to_translate
         self._llm = None
         
-        # RTL display width
         self.RW = 120
-        
-        # Supported RTL languages
         self.rtl_languages = self.SUPPORTED_LANGUAGES
-        
-        # Store translated sample text to avoid re-translating
         self._eng_sample_text = None
-        
-        # Store features for dependence plot
         self._cached_features = None
-        
-        # Feature translation cache
         self._feature_translation_cache = {}
-        
-        # Store cached feature names
         self._cached_feature_names = None
-        
-        # Font properties
         self.font_path = None
         self.font_name = None
         
-        # ── Font Initialization ──────────────────────────────────────────
-        self._initialize_font(custom_font_path)
+        # Font initialization
+        set_current_language(self.language)
+        print(f"[DEBUG] Current language set to: {self.language}")
         
-        print(f"\n{'='*60}")
-        print(f"🔤 RTL SHAP Explainer Initialized")
-        print(f"{'='*60}")
-        print(f"   Language: {self.language}")
-        print(f"   API Type: {self.api_type}")
-        print(f"   Font: {self.font_name or 'default'}")
-        print(f"   Translations: {'Disabled (fast)' if self.skip_translation else 'Enabled → English'}")
-        print(f"   Max features to translate: {self.max_features_to_translate}")
-        print(f"{'='*60}\n")
-    
-    def _initialize_font(self, custom_font_path=None):
-        """Initialize and register RTL font for the selected language."""
-        # Language-specific font mappings
+        font_path, font_name = _find_rtl_font(language=self.language)
+        
+        if font_path:
+            set_rtl_font_path(font_path)
+            self.font_path = font_path
+            self.font_name = font_name
+            
+            try:
+                import matplotlib as mpl
+                from matplotlib import font_manager
+                
+                font_manager.fontManager.addfont(font_path)
+                prop = font_manager.FontProperties(fname=font_path)
+                font_display_name = prop.get_name()
+                
+                mpl.rcParams['font.family'] = font_display_name
+                mpl.rcParams['axes.unicode_minus'] = False
+                
+                print(f"[INFO] Loaded {self.language} font: {font_name}")
+                print(f"[INFO] Font display name: {font_display_name}")
+            except Exception as e:
+                print(f"[WARNING] Could not register font: {e}")
+                print(f"[INFO] Loaded {self.language} font: {font_name}")
+        else:
+            print(f"[WARNING] No font found for {self.language}")
+        
         self._language_fonts = {
             "Arabic": "NotoSansArabic-Regular.ttf",
             "Urdu": "JameelNooriNastaliq.ttf",
@@ -132,57 +121,15 @@ class RTLSHAPExplainer:
             "Hebrew": "NotoSansHebrew-Regular.ttf",
         }
         
-        # Try to find the font
-        font_path = custom_font_path
-        
-        if not font_path:
-            # Check common locations for the font
-            font_name = self._language_fonts.get(self.language, "NotoSansArabic-Regular.ttf")
-            
-            # Common font directories
-            font_dirs = [
-                os.path.join(os.path.dirname(__file__), 'fonts'),
-                os.path.join(os.getcwd(), 'fonts'),
-                os.path.join(sys.prefix, 'share', 'fonts', 'truetype'),
-                os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts'),
-                '/usr/share/fonts/truetype',
-                '/usr/local/share/fonts',
-                os.path.expanduser('~/.fonts'),
-                os.path.expanduser('~/Library/Fonts'),  # macOS
-                os.path.join(os.path.dirname(__file__)),  # Same directory
-            ]
-            
-            for font_dir in font_dirs:
-                potential_path = os.path.join(font_dir, font_name)
-                if os.path.exists(potential_path):
-                    font_path = potential_path
-                    break
-        
-        if font_path and os.path.exists(font_path):
-            self.font_path = font_path
-            self.font_name = os.path.basename(font_path)
-            
-            try:
-                # Register font with matplotlib
-                font_manager.fontManager.addfont(font_path)
-                prop = font_manager.FontProperties(fname=font_path)
-                font_display_name = prop.get_name()
-                
-                # Set as default for all text
-                mpl.rcParams['font.family'] = font_display_name
-                mpl.rcParams['axes.unicode_minus'] = False
-                
-                print(f"[INFO] Loaded {self.language} font: {self.font_name}")
-                print(f"[INFO] Font display name: {font_display_name}")
-                
-            except Exception as e:
-                print(f"[WARNING] Could not register font: {e}")
-                print(f"[INFO] Font file found at: {font_path}")
-        else:
-            print(f"[WARNING] No {self.language} font found.")
-            print(f"[INFO] RTL text may not display correctly in plots.")
-            print(f"[INFO] To fix: Download '{self._language_fonts.get(self.language)}'")
-            print(f"[INFO] and place it in the 'fonts' directory or pass as custom_font_path")
+        print(f"\n{'='*60}")
+        print(f"🔤 RTL SHAP Explainer Initialized")
+        print(f"{'='*60}")
+        print(f"   Language: {self.language}")
+        print(f"   API Type: {self.api_type}")
+        print(f"   Font: {self.font_name or self._language_fonts.get(self.language, 'default')}")
+        print(f"   Translations: {'Disabled (fast)' if self.skip_translation else 'Enabled → English'}")
+        print(f"   Max features to translate: {self.max_features_to_translate}")
+        print(f"{'='*60}\n")
     
     @property
     def llm(self):
@@ -196,7 +143,7 @@ class RTLSHAPExplainer:
                     base_url="https://api.groq.com/openai/v1",
                     temperature=0.1,
                 )
-            else:  # github / azure
+            else:
                 api_key = os.getenv("GITHUB_TOKEN")
                 self._llm = ChatOpenAI(
                     model="gpt-4o-mini",
@@ -208,7 +155,6 @@ class RTLSHAPExplainer:
     
     @llm.setter
     def llm(self, value):
-        """Allow tests to inject a custom LLM or mock."""
         self._llm = value
     
     def _invoke_llm(self, prompt: str, retries: int = 2, delay: float = 3.0) -> str:
@@ -229,24 +175,19 @@ class RTLSHAPExplainer:
     # ── RTL Text Helpers ──────────────────────────────────────────────────────
     
     def _fix_for_terminal(self, text: str) -> str:
-        """Reshape RTL text so joined letters display correctly in terminals."""
         try:
             return arabic_reshaper.reshape(str(text))
         except Exception:
             return str(text)
     
     def _fix_for_plot(self, text: str) -> str:
-        """
-        Reshape + BiDi RTL text for Matplotlib.
-        This ensures correct rendering in plots for all RTL languages.
-        """
         try:
             reshaped = arabic_reshaper.reshape(str(text))
             return get_display(reshaped)
         except Exception:
             return str(text)
     
-    # ── Translation Methods ──────────────────────────────────────────────────
+    # ── Chunked Batch Translation ────────────────────────────────────────────
     
     def _translate_batch(self, texts: list, chunk_size: int = 20) -> list:
         """
@@ -340,21 +281,19 @@ class RTLSHAPExplainer:
             
             Text: {text}
             """
-            
             response = self._invoke_llm(prompt)
             translation = response.replace('"', '').strip()
             self._feature_translation_cache[text] = translation
             return translation
-            
         except Exception as e:
             print(f"[WARNING] Translation failed for '{text}': {e}")
             return text
     
     def _translate_sample(self, sample_text: str) -> str:
-        """
-        Translate sample text and cache it.
-        This prevents re-translating multiple times.
-        """
+        """Translate sample text."""
+        if self.skip_translation:
+            return sample_text
+        
         if self._eng_sample_text is not None:
             return self._eng_sample_text
         
@@ -377,7 +316,7 @@ class RTLSHAPExplainer:
         return self._eng_sample_text
     
     def _translate_features(self, feature_names: list) -> list:
-        """Translate feature names to English using batch translation."""
+        """Translate feature names using chunked batch translation."""
         if self.skip_translation or not feature_names:
             return feature_names
         
@@ -390,7 +329,7 @@ class RTLSHAPExplainer:
         return self._translate_batch(feature_names_to_translate)
     
     def _translate_label(self, label: str) -> str:
-        """Translate prediction label to English."""
+        """Translate prediction label."""
         if self.skip_translation:
             return label
         
@@ -406,7 +345,6 @@ class RTLSHAPExplainer:
     # ── Feature Extraction ──────────────────────────────────────────────────
     
     def get_top_features(self, shap_values, num_features: int = 5) -> list:
-        """Extract top N features ranked by absolute SHAP value."""
         values = shap_values.values
         feature_names = shap_values.feature_names
         
@@ -421,13 +359,12 @@ class RTLSHAPExplainer:
             mean_vals = values
         
         sorted_idx = np.argsort(mean_abs)[::-1][:num_features]
-        
         return [(str(feature_names[i]), float(mean_vals[i])) for i in sorted_idx]
     
-    # ── SHAP Translation ───────────────────────────────────────────────────
+    # ── Translate SHAP Explanation ───────────────────────────────────────────
     
     def _translate_shap_explanation(self, shap_values):
-        """Translate feature names in a SHAP Explanation object."""
+        """Translate feature names in a SHAP Explanation."""
         if self.skip_translation:
             return shap_values
         
@@ -447,7 +384,7 @@ class RTLSHAPExplainer:
             data = shap_values.data if hasattr(shap_values, 'data') else None
             display_data = shap_values.display_data if hasattr(shap_values, 'display_data') else None
             
-            # Handle different dimensions
+            # Handle 1D values (single feature)
             if values.ndim == 1:
                 if len(eng_names) == 0:
                     eng_names = ["Feature"]
@@ -462,6 +399,7 @@ class RTLSHAPExplainer:
                     display_data=display_data
                 )
             else:
+                # 2D values (multiple features)
                 n_features = values.shape[1] if values.ndim == 2 else 1
                 if len(eng_names) > n_features:
                     eng_names = eng_names[:n_features]
@@ -481,12 +419,12 @@ class RTLSHAPExplainer:
             print(f"[WARNING] Could not translate SHAP explanation: {e}")
             return shap_values
     
-    # ── Dependence Plot ──────────────────────────────────────────────────────
+    # ── Dependence Plot ───────────────────────────────────────────────────────
     
-    def _show_dependence_plot(self, shap_values, features, feature_names, title_prefix=""):
-        """
-        Show a dependence plot with RTL support.
-        """
+    def _show_dependence_plot(self, shap_values, features, feature_names, title_prefix="Hebrew"):
+        """Show a dependence plot."""
+        import matplotlib.pyplot as plt
+        
         fig, ax = plt.subplots(figsize=(10, 6))
         
         # Get the data
@@ -506,13 +444,13 @@ class RTLSHAPExplainer:
             x_data = features[:, 0] if features is not None else np.arange(len(values))
             y_data = values[:, 0]
             color_data = features[:, 1] if features is not None else values[:, 1]
-            x_label = self._fix_for_plot(str(feature_names[0])) if len(feature_names) > 0 else "Feature 1"
-            color_label = self._fix_for_plot(str(feature_names[1])) if len(feature_names) > 1 else "Feature 2"
+            x_label = feature_names[0] if len(feature_names) > 0 else "Feature 1"
+            color_label = feature_names[1] if len(feature_names) > 1 else "Feature 2"
         else:
             x_data = features if features is not None else np.arange(len(values))
             y_data = values if values.ndim == 1 else values[:, 0]
             color_data = y_data
-            x_label = self._fix_for_plot(str(feature_names[0])) if len(feature_names) > 0 else "Feature"
+            x_label = feature_names[0] if len(feature_names) > 0 else "Feature"
             color_label = x_label
         
         scatter = ax.scatter(
@@ -544,44 +482,43 @@ class RTLSHAPExplainer:
     # ── Plot Function Handler ──────────────────────────────────────────────────
     
     def _call_plot_function(self, plot_fn, shap_values):
-        """
-        Call a plot function with the appropriate arguments.
-        Handles different SHAP plot types correctly.
-        """
+        """Call a plot function with translated feature names."""
         import inspect
         
         sig = inspect.signature(plot_fn)
         plot_name = plot_fn.__name__ if hasattr(plot_fn, '__name__') else str(plot_fn)
         
+        translated_shap = self._translate_shap_explanation(shap_values)
+        
         # Handle scatter/dependence_plot
         if plot_name in ['scatter', 'dependence_plot']:
-            if hasattr(shap_values, 'data') and shap_values.data is not None:
-                features = shap_values.data
+            if hasattr(translated_shap, 'data') and translated_shap.data is not None:
+                features = translated_shap.data
             else:
                 features = self._cached_features
             
             if 'features' in sig.parameters:
-                return plot_fn(shap_values=shap_values, features=features)
+                return plot_fn(shap_values=translated_shap, features=features)
             else:
-                return plot_fn(shap_values=shap_values)
+                return plot_fn(shap_values=translated_shap)
         
         # Handle decision_plot
         elif plot_name == 'decision_plot':
-            base_value = getattr(shap_values, 'base_values', None) or 0.0
+            base_value = getattr(translated_shap, 'base_values', None) or 0.0
             
-            if hasattr(shap_values, 'data') and shap_values.data is not None:
-                features = shap_values.data
+            if hasattr(translated_shap, 'data') and translated_shap.data is not None:
+                features = translated_shap.data
             else:
                 features = self._cached_features
             
-            if isinstance(shap_values, list):
-                shap_vals = [sv.values for sv in shap_values]
-                features_list = [sv.data for sv in shap_values if hasattr(sv, 'data')]
-                feature_names = shap_values[0].feature_names if hasattr(shap_values[0], 'feature_names') else None
-                return plot_fn(base_value=base_value, shap_values=shap_vals, features=features_list, feature_names=feature_names)
+            if isinstance(translated_shap, list):
+                shap_vals = [sv.values for sv in translated_shap]
+                features = [sv.data for sv in translated_shap if hasattr(sv, 'data')]
+                feature_names = translated_shap[0].feature_names if hasattr(translated_shap[0], 'feature_names') else None
+                return plot_fn(base_value=base_value, shap_values=shap_vals, features=features, feature_names=feature_names)
             else:
-                shap_vals = shap_values.values if hasattr(shap_values, 'values') else shap_values
-                feature_names = shap_values.feature_names if hasattr(shap_values, 'feature_names') else None
+                shap_vals = translated_shap.values if hasattr(translated_shap, 'values') else translated_shap
+                feature_names = translated_shap.feature_names if hasattr(translated_shap, 'feature_names') else None
                 
                 if isinstance(shap_vals, np.ndarray) and shap_vals.ndim == 2 and shap_vals.shape[0] == 1:
                     shap_vals = shap_vals[0]
@@ -591,35 +528,33 @@ class RTLSHAPExplainer:
         
         # Handle heatmap
         elif plot_name == 'heatmap':
-            if hasattr(shap_values, 'feature_names') and shap_values.feature_names is not None:
-                return plot_fn(shap_values)
+            if hasattr(translated_shap, 'feature_names') and translated_shap.feature_names is not None:
+                return plot_fn(translated_shap)
             else:
                 try:
-                    if self._cached_feature_names is not None:
+                    if hasattr(self, '_cached_feature_names') and self._cached_feature_names is not None:
                         new_shap = shap.Explanation(
-                            values=shap_values.values,
-                            base_values=shap_values.base_values,
-                            data=shap_values.data if hasattr(shap_values, 'data') else None,
+                            values=translated_shap.values,
+                            base_values=translated_shap.base_values,
+                            data=translated_shap.data if hasattr(translated_shap, 'data') else None,
                             feature_names=self._cached_feature_names
                         )
                         return plot_fn(new_shap)
                 except Exception as e:
                     print(f"[WARNING] Heatmap feature rebuild issue: {e}")
-                return plot_fn(shap_values)
+                return plot_fn(translated_shap)
         
         # Handle other plots (bar, waterfall, beeswarm, etc.)
         else:
-            return plot_fn(shap_values)
+            return plot_fn(translated_shap)
     
     # ── Prompt Templates ─────────────────────────────────────────────────────
     
     def _rtl_prompt(self, feat_name: str, shap_val: float, prediction_label: str) -> str:
-        """Generate RTL-language explanation prompt."""
         if self.skip_translation:
             return f"[Translations disabled] Feature: {feat_name} (SHAP: {shap_val:+.4f})"
         
         impact = "positively" if shap_val > 0 else "negatively"
-        
         return f"""
         SYSTEM: You are an AI Explainability Assistant.
         LANGUAGE: {self.language}
@@ -632,9 +567,7 @@ class RTLSHAPExplainer:
         """
     
     def _eng_prompt(self, feat_name: str, shap_val: float, prediction_label: str, eng_translation: str) -> str:
-        """Generate English explanation prompt."""
         impact = "positively" if shap_val > 0 else "negatively"
-        
         return f"""
         SHAP Analysis: In the context of the prediction '{prediction_label}' 
         (English: '{eng_translation}'), explain in one concise English paragraph 
@@ -654,25 +587,7 @@ class RTLSHAPExplainer:
         sample_text: str = None,
         features=None
     ):
-        """
-        Run the complete RTL SHAP explanation workflow.
-        
-        Parameters
-        ----------
-        shap_values : shap.Explanation
-            SHAP explanation object
-        prediction_label : str
-            Prediction label in the RTL language
-        plot_fn : callable
-            Plot function to use (bar, summary_plot, dependence_plot, etc.)
-        max_features : int
-            Maximum features to display
-        sample_text : str, optional
-            Sample text in RTL language for translation
-        features : array-like, optional
-            Feature values for dependence plot
-        """
-        # Store features for dependence plot
+        """Run the complete RTL SHAP explanation workflow."""
         if features is not None:
             self._cached_features = features
         elif hasattr(shap_values, 'data') and shap_values.data is not None:
@@ -686,18 +601,25 @@ class RTLSHAPExplainer:
         print(f"Prediction: {prediction_label}".center(80))
         print("=" * 80)
         
-        # ── Step 1: Display Plot ──────────────────────────────────────
+        # ── Step 1: Display Plot ──────────────────────────────────────────────
+        
+        # Check if we should show a dependence plot (plot_fn is None but features are provided)
         if plot_fn is None and features is not None:
             print(f"\n[GENERATING {self.language.upper()} DEPENDENCE PLOT...]")
+            
+            # Get feature names
             feature_names = shap_values.feature_names if hasattr(shap_values, 'feature_names') else []
+            
+            # Show Hebrew dependence plot
             self._show_dependence_plot(shap_values, features, feature_names, title_prefix=self.language)
+            
         elif plot_fn is not None:
             print(f"\n[GENERATING {self.language.upper()} SHAP PLOT...]")
             self._call_plot_function(plot_fn, shap_values)
         else:
             print("\n[INFO] No plot_fn provided and no features for dependence plot. Skipping visualization.")
         
-        # ── Step 2: Ask for RTL Explanation ──────────────────────────
+        # ── Step 2: Ask for RTL Explanation ───────────────────────────────────
         print(f"\n[{self.language} Explanation Mode]")
         
         n = None
@@ -726,7 +648,6 @@ class RTLSHAPExplainer:
                 print("\n[INFO] Operation cancelled by user.")
                 return
         
-        # ── Step 3: Generate RTL Explanations ────────────────────────
         top_features = self.get_top_features(shap_values, n)
         
         print("-" * self.RW)
@@ -754,7 +675,7 @@ class RTLSHAPExplainer:
         
         print("\n" + "=" * 80)
         
-        # ── Step 4: Ask for English ──────────────────────────────────
+        # ── Step 3: Ask for English ──────────────────────────────────────────
         if self.language in self.rtl_languages:
             self._ask_english_plot(shap_values, prediction_label, plot_fn, sample_text, features)
     
@@ -769,18 +690,26 @@ class RTLSHAPExplainer:
                 if choice in ["yes", "y"]:
                     print("\n[INFO] Generating English plot...")
                     
-                    # Handle dependence plot
+                    # Check if we should show English dependence plot
                     if plot_fn is None and features is not None:
                         print("\n[INFO] Generating English Dependence Plot...")
+                        
+                        # Get feature names
                         feature_names = shap_values.feature_names if hasattr(shap_values, 'feature_names') else []
+                        
+                        # Translate feature names
                         eng_feature_names = self._translate_features(feature_names)
+                        
+                        # Show English dependence plot
                         self._show_dependence_plot(shap_values, features, eng_feature_names, title_prefix="English")
+                        
                     else:
                         self._display_english_plot(
                             shap_values=shap_values,
                             prediction_label=prediction_label,
                             plot_fn=plot_fn,
-                            sample_text=sample_text
+                            sample_text=sample_text,
+                            features=features
                         )
                     
                     # Ask for English explanation
@@ -799,8 +728,8 @@ class RTLSHAPExplainer:
                 print(f"[ERROR] {e}")
                 return
     
-    def _display_english_plot(self, shap_values, prediction_label, plot_fn, sample_text):
-        """Display the English plot."""
+    def _display_english_plot(self, shap_values, prediction_label, plot_fn, sample_text, features=None):
+        """Display the English plot for bar/waterfall/etc."""
         print("\n[INFO] Translating features to English...")
         
         eng_sample_text = None
@@ -832,7 +761,7 @@ class RTLSHAPExplainer:
         else:
             print("\n[INFO] No plot_fn provided. Skipping English visualization.")
         
-        self._ask_english_explanation(eng_shap, prediction_label, eng_sample_text, features=None)
+        self._ask_english_explanation(eng_shap, prediction_label, eng_sample_text, features)
     
     def _ask_english_explanation(self, shap_values, prediction_label, eng_sample_text, features=None):
         """Ask user if they want explanation in English."""
@@ -897,6 +826,7 @@ class RTLSHAPExplainer:
                 print("Please enter a valid number.")
         
         eng_top_features = self.get_top_features(shap_values, n)
+        
         eng_label = self._translate_label(prediction_label)
         
         print("-" * 80)
@@ -923,7 +853,6 @@ class RTLSHAPExplainer:
         print("Analysis complete.")
     
     def _rebuild_explanation_with_names(self, shap_values, new_names):
-        """Rebuild SHAP Explanation with new feature names."""
         try:
             return shap.Explanation(
                 values=shap_values.values,
@@ -943,15 +872,7 @@ class RTLSHAPExplainer:
 
 # ── Convenience Functions ──────────────────────────────────────────────
 
-def create_explainer(
-    language: str = "Urdu", 
-    model=None, 
-    vectorizer=None, 
-    api_type: str = "groq",
-    skip_translation: bool = False,
-    max_features_to_translate: int = 50,
-    custom_font_path: str = None
-):
+def create_explainer(language: str, model=None, vectorizer=None, api_type: str = "groq", skip_translation: bool = False, max_features_to_translate: int = 50):
     """Factory function to create an RTLSHAPExplainer instance."""
     return RTLSHAPExplainer(
         language=language,
@@ -959,8 +880,7 @@ def create_explainer(
         vectorizer=vectorizer,
         api_type=api_type,
         skip_translation=skip_translation,
-        max_features_to_translate=max_features_to_translate,
-        custom_font_path=custom_font_path
+        max_features_to_translate=max_features_to_translate
     )
 
 
