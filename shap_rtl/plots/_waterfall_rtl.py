@@ -18,6 +18,8 @@ from shap.plots._style import get_style
 from ..rtl_utils import (
     _find_rtl_font,
     is_rtl_text,
+    render_rtl_label,
+    render_mixed_label,
     apply_rtl_ytick_images,
     hide_rtl_text_ticks,
 )
@@ -93,13 +95,8 @@ def waterfall(shap_values, max_display=10, show=True):
                      color=style.vlines_color, linestyle="--", linewidth=0.5, zorder=-1)
 
         raw_fn = str(feature_names[order[i]])
-        if features is None:
-            yticklabels[rng[i]] = raw_fn
-        else:
-            fval = features[order[i]]
-            fval_str = (format_value(float(fval), "%0.03f")
-                        if np.issubdtype(type(fval), np.number) else str(fval))
-            yticklabels[rng[i]] = f"{fval_str} = {raw_fn}"
+        # CRITICAL FIX: Only store the feature name, NOT the value
+        yticklabels[rng[i]] = raw_fn
 
     if num_features < len(values):
         yticklabels[0] = f"{len(shap_values) - num_features + 1} other features"
@@ -145,6 +142,7 @@ def waterfall(shap_values, max_display=10, show=True):
                          xerr=np.array([[pos_widths[i] - pos_low[i]],
                                         [pos_high[i] - pos_widths[i]]]),
                          ecolor=style.secondary_color_positive)
+        # Add SHAP value INSIDE the bar
         txt_obj = plt.text(pos_lefts[i] + 0.5 * dist, pos_inds[i],
                            format_value(pos_widths[i], "%+0.02f"),
                            horizontalalignment="center", verticalalignment="center",
@@ -167,6 +165,7 @@ def waterfall(shap_values, max_display=10, show=True):
                          xerr=np.array([[neg_widths[i] - neg_low[i]],
                                         [neg_high[i] - neg_widths[i]]]),
                          ecolor=style.secondary_color_negative)
+        # Add SHAP value INSIDE the bar
         txt_obj = plt.text(neg_lefts[i] + 0.5 * dist, neg_inds[i],
                            format_value(neg_widths[i], "%+0.02f"),
                            horizontalalignment="center", verticalalignment="center",
@@ -179,11 +178,12 @@ def waterfall(shap_values, max_display=10, show=True):
                      color=style.primary_color_negative, fontsize=12)
 
     # ── y-ticks ───────────────────────────────────────────────────────────────
-    ytick_pos   = list(range(num_features)) + list(np.arange(num_features) + 1e-8)
-    split_labels = [lbl.split("=")[-1].strip() for lbl in yticklabels[:-1]]
-    all_labels   = yticklabels[:-1] + split_labels
-
-    plt.yticks(ytick_pos, all_labels, fontsize=13)
+    # CRITICAL FIX: Only use feature names (no values on the left)
+    ytick_pos = list(range(num_features))
+    yticklabels_only = yticklabels[:-1]  # Remove the extra empty label
+    
+    # Set yticks with ONLY feature names (no values)
+    plt.yticks(ytick_pos, yticklabels_only, fontsize=13)
 
     # horizontal feature lines
     for i in range(num_features):
@@ -241,40 +241,25 @@ def waterfall(shap_values, max_display=10, show=True):
 
     # ── RTL image injection ───────────────────────────────────────────────────
     if rtl_mode and font_path is not None:
-        # Bottom half of ytick_pos are the gray "value = name" labels
-        # Top half are the black "name" labels  (matplotlib draws them in two passes)
-        # We handle both passes: gray ones (feature value labels) and black (feature name labels)
-
-        # Map: tick position → label text
-        gray_labels = yticklabels[:-1]          # "0.123 = عمر"   positions 0..n-1
-        black_labels = split_labels              # "عمر"            positions 0+1e-8..n-1+1e-8
-
-        # We need to hide & replace for BOTH sets
         fig.canvas.draw()
-
-        # Replace gray labels (feature value = feature name)
-        # These sit at integer ytick positions
+        
+        # Get all tick labels
         tick_objs = ax.get_yticklabels()
-        n_ticks   = len(tick_objs)
-        half      = n_ticks // 2
-
-        # gray ticks: indices 0..half-1  (bottom set, colored gray)
-        # Use mixed=True so "value = " is rendered with a Latin font and the
-        # RTL feature name is rendered with HarfBuzz — avoids the HarfBuzz
-        # mis-shaping of a mixed LTR+RTL string passed as a single buffer.
-        for j, (tick_obj, label_text) in enumerate(zip(tick_objs[:half], gray_labels)):
-            if is_rtl_text(label_text):
-                tick_obj.set_visible(False)
-                _inject_image_label(ax, fig, label_text, j,
-                                    font_path, color=style.tick_labels_color,
-                                    mixed=True, font_size_pt=13)
-
-        # black ticks: indices half..n-1 (top set, RTL name only)
-        for j, (tick_obj, label_text) in enumerate(zip(tick_objs[half:], black_labels)):
-            if is_rtl_text(label_text):
-                tick_obj.set_visible(False)
-                _inject_image_label(ax, fig, label_text, j + 1e-8,
-                                    font_path, color="black", font_size_pt=13)
+        
+        # Hide ALL existing tick labels (we'll replace with RTL images if needed)
+        for tick_obj in tick_objs:
+            tick_obj.set_visible(False)
+        
+        # Only render RTL feature names (no values)
+        for j, label_text in enumerate(yticklabels_only):
+            if is_rtl_text(str(label_text)):
+                _inject_image_label(
+                    ax, fig, str(label_text), j,
+                    font_path,
+                    color="black",
+                    font_size_pt=13,
+                    mixed=False  # Pure RTL text
+                )
 
     if show:
         plt.show()
@@ -285,34 +270,44 @@ def waterfall(shap_values, max_display=10, show=True):
 def _inject_image_label(ax, fig, text: str, ydata: float, font_path: str,
                         color: str = "black", font_size_pt: float = 12,
                         mixed: bool = False):
-    """Render *text* as an image and place it left of the y-axis at *ydata*.
-
-    mixed=True uses render_mixed_label which correctly handles 'value = RTL_name'
-    labels by rendering the LTR prefix with a Latin font and the RTL name with
-    HarfBuzz, then joining them.  mixed=False (default) uses render_rtl_label.
-    """
+    """Render *text* as an image and place it left of the y-axis at *ydata*."""
     from matplotlib.offsetbox import AnnotationBbox, OffsetImage
     from ..rtl_utils import render_rtl_label, render_mixed_label
     import matplotlib.colors as mcolors
+    
+    if not text or not isinstance(text, str):
+        return
 
-    img_pil = (render_mixed_label(text, font_path, font_size_pt=font_size_pt, dpi=150)
-               if mixed else
-               render_rtl_label(text, font_path, font_size_pt=font_size_pt, dpi=150))
-    if img_pil.width < 2:
+    try:
+        if mixed:
+            img_pil = render_mixed_label(text, font_path, font_size_pt=font_size_pt, dpi=150)
+        else:
+            img_pil = render_rtl_label(text, font_path, font_size_pt=font_size_pt, dpi=150)
+    except Exception as e:
+        try:
+            img_pil = render_rtl_label(text, font_path, font_size_pt=font_size_pt, dpi=150)
+        except:
+            return
+    
+    if img_pil is None or img_pil.width < 2:
         return
 
     arr = np.array(img_pil, dtype=np.uint8).copy()
-    # colorise
+    
+    # Force black color
     try:
-        rgb = mcolors.to_rgb(color)
-        arr[:, :, 0] = int(rgb[0] * 255)
-        arr[:, :, 1] = int(rgb[1] * 255)
-        arr[:, :, 2] = int(rgb[2] * 255)
+        rgb = (0, 0, 0)  # Always black
+        for i in range(arr.shape[0]):
+            for j in range(arr.shape[1]):
+                if arr[i, j, 3] > 0:
+                    arr[i, j, 0] = 0
+                    arr[i, j, 1] = 0
+                    arr[i, j, 2] = 0
     except Exception:
         pass
 
-    zoom = 72.0 / 150.0   # render at 150 dpi, display at 72 dpi equivalent
-    oi   = OffsetImage(arr, zoom=zoom)
+    zoom = 72.0 / 150.0
+    oi = OffsetImage(arr, zoom=zoom)
     oi.image.axes = ax
 
     ab = AnnotationBbox(

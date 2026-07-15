@@ -52,7 +52,7 @@ def beeswarm(
     max_display: int | None = 10,
     order=Explanation.abs.mean(0),
     clustering=None, cluster_threshold=0.5, color=None,
-    axis_color="#333333", alpha: float = 1.0, ax=None,
+    axis_color="#000000", alpha: float = 1.0, ax=None,
     show: bool = True, log_scale: bool = False,
     color_bar: bool = True, s: float = 16,
     plot_size: Literal["auto"] | float | tuple | None = "auto",
@@ -162,7 +162,7 @@ def beeswarm(
     elif isinstance(plot_size, (list,tuple)): fig.set_size_inches(*plot_size)
     elif plot_size is not None:
         fig.set_size_inches(8, min(len(feature_order), max_display) * plot_size + 1.5)
-    ax.axvline(x=0, color="#999999", zorder=-1)
+    ax.axvline(x=0, color="#000000", zorder=-1)
 
     for pos, i in enumerate(reversed(feature_inds)):
         ax.axhline(y=pos, color="#cccccc", lw=0.5, dashes=(1,5), zorder=-1)
@@ -194,7 +194,7 @@ def beeswarm(
             if features is not None and features.shape[0]!=len(shaps):
                 raise DimensionError("Feature/SHAP row count mismatch")
             nm = np.isnan(fvalues)
-            ax.scatter(shaps[nm], pos+ys[nm], color="#777777", s=s, alpha=alpha, linewidth=0, zorder=3, rasterized=len(shaps)>500)
+            ax.scatter(shaps[nm], pos+ys[nm], color="#000000", s=s, alpha=alpha, linewidth=0, zorder=3, rasterized=len(shaps)>500)
             cv = fvalues[~nm].astype(np.float64); cvi = cv.copy()
             cvi[np.isnan(cv)]=(vmin+vmax)/2.; cv[cvi>vmax]=vmax; cv[cvi<vmin]=vmin
             ax.scatter(shaps[~nm], pos+ys[~nm], cmap=color, vmin=vmin, vmax=vmax,
@@ -202,7 +202,7 @@ def beeswarm(
         else:
             if safe_isinstance(color,"matplotlib.colors.Colormap") and hasattr(color,"colors"): color=color.colors
             ax.scatter(shaps, pos+ys, s=s, alpha=alpha, linewidth=0, zorder=3,
-                       color=color if colored_feature else "#777777", rasterized=len(shaps)>500)
+                       color=color if colored_feature else "#000000", rasterized=len(shaps)>500)
 
     if safe_isinstance(color,"matplotlib.colors.Colormap") and color_bar and features is not None:
         import matplotlib.cm as cm

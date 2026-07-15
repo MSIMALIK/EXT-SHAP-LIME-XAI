@@ -26,7 +26,7 @@ from ..rtl_utils import _find_rtl_font, is_rtl_text
 def _replace_rtl_xlabel(
     ax, fig, font_path: str,
     font_size_pt: float = 12,
-    color: str = "#333333",
+    color: str = "#000000",
 ):
     """Clear a RTL x-axis label and replace it with a HarfBuzz image."""
     from matplotlib.offsetbox import AnnotationBbox, OffsetImage

@@ -78,7 +78,7 @@ def decision_plot(
     highlight=None,
     link: str = "identity",
     plot_color=None,
-    axis_color: str = "#333333",
+    axis_color: str = "#000000",
     y_demarc_color=None,
     alpha=None,
     color_bar: bool = True,

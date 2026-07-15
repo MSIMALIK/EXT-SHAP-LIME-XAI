@@ -2,7 +2,7 @@
 shap_rtl.plots.bar - RTL-aware bar plot.
 
 Identical to shap.plots.bar except Urdu/Arabic/Persian feature names are rendered
-via HarfBuzz+FreeType images instead of matplotlib text glyphs, with duplicate rendering fixes.
+via HarfBuzz+FreeType images instead of matplotlib text glyphs.
 """
 
 import warnings
@@ -50,7 +50,19 @@ def _inject_image_label(ax, fig, text, ydata, font_path, color="black", font_siz
 
 def bar(shap_values, max_display=10, order=Explanation.abs,
         clustering=None, clustering_cutoff=0.5, show_data="auto", ax=None, show=True):
-    """RTL-aware bar plot (drop-in replacement for shap.plots.bar) with zero-ghosting fixes."""
+    """RTL-aware bar plot (drop-in replacement for shap.plots.bar)."""
+    
+    # ============================================================
+    # FORCE BLACK TEXT COLOR FOR ALL TEXT ELEMENTS
+    # ============================================================
+    import matplotlib as mpl
+    mpl.rcParams['text.color'] = 'black'
+    mpl.rcParams['axes.labelcolor'] = 'black'
+    mpl.rcParams['xtick.color'] = 'black'
+    mpl.rcParams['ytick.color'] = 'black'
+    mpl.rcParams['axes.edgecolor'] = 'black'
+    # ============================================================
+    
     style = get_style()
 
     if isinstance(shap_values, Explanation):
@@ -158,9 +170,7 @@ def bar(shap_values, max_display=10, order=Explanation.abs,
 
     yticklabels = []
     for i in feature_inds:
-        fn_str = str(feature_names[i])
-        
-        yticklabels.append(fn_str)
+        yticklabels.append(str(feature_names[i]))
         
     if num_features < len(values[0]):
         yticklabels[-1] = f"Sum of {num_cut} other features"
@@ -185,8 +195,6 @@ def bar(shap_values, max_display=10, order=Explanation.abs,
                 hatch=patterns[i], edgecolor=(1,1,1,0.8),
                 label=f"{cohort_labels[i]} [{cohort_sizes[i] if i < len(cohort_sizes) else None}]")
 
-    # FIX 1: Wipe the separate 1e-8 duplicate tick registration track entirely. 
-    # Registering them under a single track stops double rendering.
     ax.set_yticks(y_pos)
     ax.set_yticklabels(yticklabels, fontsize=13)
 
@@ -202,12 +210,12 @@ def bar(shap_values, max_display=10, order=Explanation.abs,
                 ax.text(values[i,ind] - (5/72)*bbox_to_xscale, y_pos[j]+ypos_offset,
                         format_value(values[i,ind], "%+0.02f"),
                         horizontalalignment="right", verticalalignment="center",
-                        color=style.primary_color_negative, fontsize=12)
+                        color="black", fontsize=12)  # ← FORCED BLACK
             else:
                 ax.text(values[i,ind] + (5/72)*bbox_to_xscale, y_pos[j]+ypos_offset,
                         format_value(values[i,ind], "%+0.02f"),
                         horizontalalignment="left", verticalalignment="center",
-                        color=style.primary_color_positive, fontsize=12)
+                        color="black", fontsize=12)  # ← FORCED BLACK
 
     for i in range(num_features):
         ax.axhline(i+1, color="#101010", lw=0.5, dashes=(1,5), zorder=-1)
@@ -217,39 +225,37 @@ def bar(shap_values, max_display=10, order=Explanation.abs,
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
     if negative_values_present: ax.spines["left"].set_visible(False)
-    ax.tick_params("x", labelsize=11)
+    ax.tick_params("x", labelsize=11, colors="black")  # ← FORCED BLACK
 
     xmin, xmax = ax.get_xlim()
     x_buffer   = (xmax - xmin) * 0.05
     ax.set_xlim(xmin - x_buffer if negative_values_present else xmin, xmax + x_buffer)
-    ax.set_xlabel(xlabel, fontsize=13)
-    if len(values) > 1: ax.legend(fontsize=12)
+    ax.set_xlabel(xlabel, fontsize=13, color="black")  # ← FORCED BLACK
+    if len(values) > 1: 
+        legend = ax.legend(fontsize=12)
+        for text in legend.get_texts():
+            text.set_color("black")  # ← FORCED BLACK
 
     fig = ax.figure
     fig.canvas.draw()
     
     tick_labels_mpl = ax.yaxis.get_majorticklabels()
     for i in range(min(num_features, len(tick_labels_mpl))):
-        tick_labels_mpl[i].set_color(style.tick_labels_color)
+        tick_labels_mpl[i].set_color("black")  # ← FORCED BLACK
 
-    # FIX 2: Explicitly strip out text contents inside the matplotlib metadata arrays ('')
-    # before image mapping. This acts as a complete visual eraser.
-    # FIX 2: Clear native text layers, handle RTL images, and force English text to Black
+    # RTL rendering
     if rtl_mode and font_path is not None:
         fig.canvas.draw()
         ticks_all = ax.get_yticklabels()
         
         for j, (tick_obj, ltext) in enumerate(zip(ticks_all, yticklabels)):
             if is_rtl_text(ltext):
-                # 1. Clear out native text metadata so it doesn't ghost
                 tick_obj.set_text("")
                 tick_obj.set_visible(False)
-                # 2. Inject clean HarfBuzz image layout
                 _inject_image_label(ax, fig, ltext, y_pos[j], font_path, color="black")
             else:
-                # 3. If it's English/LTR, keep the native label visible but force it to solid black
                 tick_obj.set_visible(True)
-                tick_obj.set_color("black")
+                tick_obj.set_color("black")  # ← FORCED BLACK
                 tick_obj.set_alpha(1.0)
 
     # Dendrogram visualization tracking
@@ -261,12 +267,12 @@ def bar(shap_values, max_display=10, order=Explanation.abs,
         ct_pos = (clustering_cutoff/(xl_max-xl_min))*0.1*(xmax2-xmin2)+xmax2
         ax.text(ct_pos+0.005*(xmax2-xmin2), (ymax-ymin)/2,
                 "Clustering cutoff = "+format_value(clustering_cutoff,"%0.02f"),
-                ha="left", va="center", color="#000000", fontsize=12, rotation=-90)
+                ha="left", va="center", color="black", fontsize=12, rotation=-90)  # ← FORCED BLACK
         ln = ax.axvline(ct_pos, color="#0e0d0d", dashes=(1,1)); ln.set_clip_on(False)
         for xl, yl in zip(xlines, ylines):
             xv = np.array(xl)/(xl_max-xl_min)
             if np.array(xl).max() <= clustering_cutoff and np.array(yl).max() < max_display:
-                ls = ax.plot(xv*0.1*(xmax2-xmin2)+xmax2, max_display-np.array(yl), color="#999999")
+                ls = ax.plot(xv*0.1*(xmax2-xmin2)+xmax2, max_display-np.array(yl), color="#000000")
                 for l in ls: l.set_clip_on(False)
 
     if show: plt.show()

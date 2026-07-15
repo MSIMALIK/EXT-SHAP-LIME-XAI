@@ -1,36 +1,9 @@
 """
-RTL (Right-to-Left) text utilities for SHAP_RTL_package.
-
-Supports ALL RTL languages including:
-- Arabic (العربية)
-- Urdu (اردو)
-- Persian/Farsi (فارسی)
-- Hebrew (עברית)
-- Pashto (پښتو)
-- Dari (دری)
-- Kurdish (کوردی)
-- Sindhi (سنڌي)
-- Balochi (بلوچی)
-- Kashmiri (कॉशुर / کٲشُر)
-- Punjabi (Shahmukhi - پنجابی)
-
-Strategy
---------
-Matplotlib does NOT drive an OpenType shaping engine, so passing Arabic
-presentation-form codepoints (U+FBxx / U+FExx) through FontProperties
-produces tofu boxes even when a correct Nastaliq font is registered.
-
-The fix used here: render every RTL label out-of-band with
-  HarfBuzz  → proper glyph shaping
-  FreeType  → pixel-level rasterisation
-  PIL/Pillow → RGBA image
-
-then splice that image into the matplotlib Axes as an AnnotationBbox /
-OffsetImage instead of a text tick.  All original tick *positions* are kept
-exactly; we just hide the text tick and overlay the image at the same spot.
+shap_rtl.rtl_utils
+──────────────────
+RTL text utilities with proper language-specific font handling.
+Supports: Arabic, Urdu, Persian, Hebrew
 """
-
-from __future__ import annotations
 
 import os
 import warnings
@@ -42,10 +15,9 @@ _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONTS_DIR = os.path.join(os.path.dirname(_PKG_DIR), "fonts")
 
 # ============================================================================
-# FONT CONFIGURATION - Supports ALL RTL Languages
+# FONT CONFIGURATION - Language-specific fonts
 # ============================================================================
 
-# Language-specific font preferences
 _LANGUAGE_FONTS = {
     "Arabic": [
         "NotoSansArabic-Regular.ttf",
@@ -80,7 +52,7 @@ _LANGUAGE_FONTS = {
         "NotoSansHebrew-VariableFont_wdth,wght.ttf",
         "NotoSerifHebrew-Regular.ttf",
         "NotoSerifHebrew-VariableFont_wdth,wght.ttf",
-        "Arial.ttf",  # Arial has Hebrew support
+        "Arial.ttf",
         "TimesNewRoman.ttf",
         "EzraSIL-Regular.ttf",
         "SBLHebrew-Regular.ttf",
@@ -102,664 +74,735 @@ _LANGUAGE_FONTS = {
         "NotoSansArabic-Regular.ttf",
         "Amiri-Regular.ttf",
         "ScheherazadeNew-Regular.ttf",
-        "NotoSansHebrew-Regular.ttf",  # For Kurdish in Hebrew script
-    ],
-    "Sindhi": [
-        "NotoSansArabic-Regular.ttf",
-        "NotoNaskhArabic-Regular.ttf",
-        "Amiri-Regular.ttf",
-        "JameelNooriNastaliq.ttf",
-    ],
-    "Balochi": [
-        "NotoSansArabic-Regular.ttf",
-        "Amiri-Regular.ttf",
-        "ScheherazadeNew-Regular.ttf",
-    ],
-    "Kashmiri": [
-        "NotoSansArabic-Regular.ttf",
-        "Amiri-Regular.ttf",
-        "NotoSansDevanagari-Regular.ttf",  # For Kashmiri in Devanagari
-    ],
-    "Punjabi_Shahmukhi": [
-        "NotoSansArabic-Regular.ttf",
-        "NotoNastaliqUrdu-Regular.ttf",
-        "JameelNooriNastaliq.ttf",
+        "NotoSansHebrew-Regular.ttf",
     ],
 }
 
-# Fallback fonts (tried in order)
-_FALLBACK_FONTS = [
-    "NotoSansArabic-Regular.ttf",
-    "NotoNaskhArabic-Regular.ttf",
-    "NotoSansHebrew-Regular.ttf",
-    "NotoNastaliqUrdu-Regular.ttf",
-    "Amiri-Regular.ttf",
-    "ScheherazadeNew-Regular.ttf",
-    "Arial.ttf",
-    "TimesNewRoman.ttf",
-]
-
-# Font names for matplotlib
-_PREFERRED_FONT_NAMES = [
-    "Jameel Noori Nastaliq",
-    "Noto Nastaliq Urdu",
-    "Noto Sans Arabic",
-    "Noto Sans Hebrew",
-    "Amiri",
-    "Scheherazade New",
-    "Arial",
-    "Times New Roman",
-]
-
 # ============================================================================
-# RTL LANGUAGE CONFIGURATION
+# FONT KEYWORDS FOR DETECTION (PRIORITIZED)
 # ============================================================================
 
-# Supported RTL languages and their Unicode ranges
-_RTL_LANGUAGES = {
-    "Arabic": {
-        "name": "Arabic",
-        "code": "ar",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "السلام عليكم",
-    },
-    "Urdu": {
-        "name": "Urdu",
-        "code": "ur",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "السلام علیکم",
-    },
-    "Persian": {
-        "name": "Persian",
-        "code": "fa",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "سلام",
-    },
-    "Hebrew": {
-        "name": "Hebrew",
-        "code": "he",
-        "unicode_ranges": [(0x0590, 0x05FF)],
-        "sample": "שלום",
-    },
-    "Pashto": {
-        "name": "Pashto",
-        "code": "ps",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "سلام",
-    },
-    "Dari": {
-        "name": "Dari",
-        "code": "prs",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "سلام",
-    },
-    "Kurdish": {
-        "name": "Kurdish",
-        "code": "ku",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "سڵاو",
-    },
-    "Sindhi": {
-        "name": "Sindhi",
-        "code": "sd",
-        "unicode_ranges": [(0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
-        "sample": "سلام",
-    },
+_LANGUAGE_KEYWORDS = {
+    "Hebrew": [
+        "hebrew",
+        "ezra",
+        "sbl",
+        "noto sans hebrew",
+        "noto serif hebrew",
+    ],
+    "Arabic": [
+        "arabic",
+        "naskh",
+        "amiri",
+        "scheherazade",
+        "lateef",
+        "harmattan",
+        "droidnaskh",
+    ],
+    "Urdu": [
+        "nastaliq",
+        "nastaleeq",
+        "jameel",
+        "nafees",
+        "urdu",
+        "notonastaliqurdu",
+    ],
+    "Persian": [
+        "persian",
+        "farsi",
+        "vazir",
+        "vazirmatn",
+    ],
 }
 
-# Combined RTL Unicode ranges for detection
-_RTL_RANGES = []
-for lang_info in _RTL_LANGUAGES.values():
-    _RTL_RANGES.extend(lang_info["unicode_ranges"])
-# Remove duplicates
-_RTL_RANGES = list(set(_RTL_RANGES))
-
-_RTL_FONT_PATH: str | None = None
-_LATIN_FONT_PATH: str | None = None
-_FONT_REGISTERED: bool = False
-_CURRENT_LANGUAGE: str = "auto"
+_EXCLUDED_FONTS = {
+    "Hebrew": ["arabic", "nastaliq", "urdu", "persian", "naskh", "amiri", "scheherazade", "lateef", "harmattan"],
+    "Arabic": ["hebrew", "nastaliq", "urdu", "persian"],
+    "Urdu": ["hebrew", "arabic", "persian"],
+    "Persian": ["hebrew", "urdu", "arabic"],
+}
 
 # ============================================================================
-# FONT MANAGEMENT FUNCTIONS
+# GLOBAL STATE - Track current language
 # ============================================================================
 
-def _find_latin_font() -> str | None:
-    """Return a path to a Latin/system font suitable for rendering LTR text."""
-    global _LATIN_FONT_PATH
-    if _LATIN_FONT_PATH is not None:
-        return _LATIN_FONT_PATH
+_CURRENT_LANGUAGE = None
+_RTL_FONT_PATH = None
+_FONT_CACHE = {}
+_FONT_REGISTERED = False
+
+def set_current_language(language: str):
+    """Set the current language for font detection."""
+    global _CURRENT_LANGUAGE
+    _CURRENT_LANGUAGE = language
+    print(f"[DEBUG] Current language set to: {language}")
+
+
+def get_current_language() -> str:
+    """Get the current language."""
+    return _CURRENT_LANGUAGE
+
+
+# ============================================================================
+# FONT DOWNLOADER - AUTO DOWNLOAD IF MISSING
+# ============================================================================
+
+def _download_font(language: str) -> str | None:
+    """
+    Auto-download font if not available.
+    """
+    fonts_dir = _FONTS_DIR
+    os.makedirs(fonts_dir, exist_ok=True)
+    
+    font_map = {
+        "Hebrew": {
+            "url": "https://github.com/google/fonts/raw/main/ofl/notosanshebrew/NotoSansHebrew%5Bwdth,wght%5D.ttf",
+            "filename": "NotoSansHebrew-Regular.ttf"
+        },
+        "Arabic": {
+            "url": "https://github.com/google/fonts/raw/main/ofl/notosansarabic/NotoSansArabic%5Bwdth,wght%5D.ttf",
+            "filename": "NotoSansArabic-Regular.ttf"
+        },
+        "Urdu": {
+            "url": "https://github.com/google/fonts/raw/main/ofl/notonastaliqurdu/NotoNastaliqUrdu%5Bwght%5D.ttf",
+            "filename": "NotoNastaliqUrdu-Regular.ttf"
+        },
+        "Persian": {
+            "url": "https://github.com/google/fonts/raw/main/ofl/notosansarabic/NotoSansArabic%5Bwdth,wght%5D.ttf",
+            "filename": "NotoSansArabic-Regular.ttf"
+        },
+    }
+    
+    if language not in font_map:
+        return None
+    
+    font_info = font_map[language]
+    font_path = os.path.join(fonts_dir, font_info["filename"])
+    
+    if os.path.exists(font_path):
+        return font_path
     
     try:
-        import matplotlib.font_manager as fm
-        for font_name in ["DejaVu Sans", "Arial", "Helvetica", "sans-serif"]:
-            try:
-                path = fm.findfont(fm.FontProperties(family=font_name))
-                if path and os.path.isfile(path):
-                    _LATIN_FONT_PATH = path
-                    return _LATIN_FONT_PATH
-            except Exception:
-                continue
-    except Exception:
-        pass
-    
-    # Fallback: common system paths
-    for path in [
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/Helvetica.ttf",
-    ]:
-        if os.path.isfile(path):
-            _LATIN_FONT_PATH = path
-            return _LATIN_FONT_PATH
-    
-    return None
-
-
-def _get_fonts_for_language(language: str) -> list:
-    """Get list of font files to try for a specific language."""
-    fonts = []
-    
-    # Get language-specific fonts
-    if language in _LANGUAGE_FONTS:
-        fonts.extend(_LANGUAGE_FONTS[language])
-    
-    # Add fallback fonts
-    fonts.extend(_FALLBACK_FONTS)
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    return [f for f in fonts if not (f in seen or seen.add(f))]
-
-
-def _register_font_with_matplotlib(font_path: str) -> bool:
-    """
-    Register a font with matplotlib's font manager.
-    This is critical for preventing glyph missing errors.
-    """
-    global _FONT_REGISTERED
-    
-    if _FONT_REGISTERED:
-        return True
-    
-    try:
-        import matplotlib.font_manager as fm
-        import matplotlib.pyplot as plt
-        
-        # Add the font to matplotlib's font manager
-        fm.fontManager.addfont(font_path)
-        
-        # Get the font name
-        prop = fm.FontProperties(fname=font_path)
-        font_name = prop.get_name()
-        
-        # Set font family hierarchy with fallback for English
-        # This prevents glyph missing errors by using RTL font for RTL text
-        # and fallback to Latin fonts for English text
-        plt.rcParams['font.family'] = [
-            font_name,           # Primary: RTL font
-            'DejaVu Sans',       # Fallback 1: Good for English
-            'Arial',             # Fallback 2: Common system font
-            'sans-serif'         # Final fallback
-        ]
-        plt.rcParams['axes.unicode_minus'] = False
-        
-        # Clear font cache to ensure new font is used
-        try:
-            fm.fontManager.ttflist = fm.fontManager.ttflist
-        except Exception:
-            pass
-        
-        _FONT_REGISTERED = True
-        return True
-        
+        import urllib.request
+        print(f"[INFO] Downloading {language} font...")
+        urllib.request.urlretrieve(font_info["url"], font_path)
+        print(f"[INFO] Font downloaded: {font_path}")
+        return font_path
     except Exception as e:
-        print(f"[WARNING] Could not register font with matplotlib: {e}")
-        return False
+        print(f"[WARNING] Could not download font: {e}")
+        return None
 
+
+# ============================================================================
+# FONT MANAGEMENT - FIXED FOR ALL LANGUAGES
+# ============================================================================
 
 def _find_rtl_font(language: str = None) -> tuple[str | None, str]:
     """
-    Return (path, display_name) for the best available RTL font.
-    
-    Parameters
-    ----------
-    language : str, optional
-        Language name to find specific font for.
-        If None, tries to find any RTL font.
+    Find the best font for the specified language.
+    Supports: Arabic, Urdu, Persian, Hebrew
     """
-    global _RTL_FONT_PATH, _FONT_REGISTERED, _CURRENT_LANGUAGE
-
-    if language:
-        _CURRENT_LANGUAGE = language
-
-    if _RTL_FONT_PATH is not None:
-        return _RTL_FONT_PATH, os.path.splitext(os.path.basename(_RTL_FONT_PATH))[0]
-
-    # 1) Try language-specific fonts in bundled fonts dir
-    if os.path.isdir(_FONTS_DIR):
-        # Get fonts for this language
-        fonts_to_try = _get_fonts_for_language(language) if language else _FALLBACK_FONTS
+    global _RTL_FONT_PATH, _CURRENT_LANGUAGE
+    
+    # If no language specified, use the current language
+    if language is None:
+        language = _CURRENT_LANGUAGE
+    
+    # If still no language, default to Arabic
+    if language is None:
+        language = "Arabic"
+    
+    # Check cache first
+    cache_key = language
+    if cache_key in _FONT_CACHE:
+        cached_path, cached_name = _FONT_CACHE[cache_key]
+        if language in ["Urdu", "Hebrew", "Persian"] and cached_name:
+            is_wrong_font = False
+            if language == "Urdu" and ("arabic" in cached_name.lower() or "hebrew" in cached_name.lower()):
+                is_wrong_font = True
+            elif language == "Hebrew" and ("arabic" in cached_name.lower() or "nastaliq" in cached_name.lower()):
+                is_wrong_font = True
+            elif language == "Persian" and ("hebrew" in cached_name.lower() or "nastaliq" in cached_name.lower()):
+                is_wrong_font = True
+            
+            if is_wrong_font:
+                del _FONT_CACHE[cache_key]
+            else:
+                return _FONT_CACHE[cache_key]
+    
+    font_path = None
+    font_name = None
+    
+    # 1) Try language-specific fonts FIRST (bundled fonts)
+    if language in _LANGUAGE_FONTS:
+        fonts_to_try = _LANGUAGE_FONTS[language]
+        if os.path.isdir(_FONTS_DIR):
+            for fname in fonts_to_try:
+                full = os.path.join(_FONTS_DIR, fname)
+                if os.path.isfile(full):
+                    font_path = full
+                    font_name = fname
+                    break
+    
+    # 2) If not found, search fonts directory with language-specific keywords
+    if font_path is None and os.path.isdir(_FONTS_DIR):
+        search_keywords = {
+            "Urdu": ["nastaliq", "urdu", "jameel", "nafees"],
+            "Arabic": ["arabic", "naskh", "amiri", "scheherazade", "lateef", "harmattan"],
+            "Hebrew": ["hebrew", "ezra", "sbl", "noto sans hebrew"],
+            "Persian": ["persian", "farsi", "vazir", "vazirmatn"],
+        }
         
-        for fname in fonts_to_try:
-            full = os.path.join(_FONTS_DIR, fname)
-            if os.path.isfile(full):
-                _RTL_FONT_PATH = full
-                _register_font_with_matplotlib(full)
-                return _RTL_FONT_PATH, fname
-
-        # any .ttf/.otf in the dir
+        keywords = search_keywords.get(language, [])
+        
+        for fname in os.listdir(_FONTS_DIR):
+            if not fname.lower().endswith((".ttf", ".otf")):
+                continue
+            
+            fname_lower = fname.lower()
+            if any(kw in fname_lower for kw in keywords):
+                font_path = os.path.join(_FONTS_DIR, fname)
+                font_name = fname
+                break
+    
+    # 3) If still not found, try to download
+    if font_path is None:
+        font_path = _download_font(language)
+        if font_path:
+            font_name = os.path.basename(font_path)
+    
+    # 4) If still not found, try ANY font
+    if font_path is None and os.path.isdir(_FONTS_DIR):
         for fname in os.listdir(_FONTS_DIR):
             if fname.lower().endswith((".ttf", ".otf")):
-                _RTL_FONT_PATH = os.path.join(_FONTS_DIR, fname)
-                _register_font_with_matplotlib(_RTL_FONT_PATH)
-                return _RTL_FONT_PATH, fname
+                font_path = os.path.join(_FONTS_DIR, fname)
+                font_name = fname
+                break
+    
+    # Cache the result
+    _FONT_CACHE[cache_key] = (font_path, font_name)
+    if font_path:
+        _RTL_FONT_PATH = font_path
+        _register_font_with_matplotlib(font_path)
+    
+    return font_path, font_name
 
-    # 2) system font search
+
+def _register_font_with_matplotlib(font_path: str) -> bool:
+    """Register a font with matplotlib."""
     try:
-        import matplotlib.font_manager as fm
-        all_fonts = {f.name.lower(): f.fname for f in fm.fontManager.ttflist}
+        import matplotlib as mpl
+        from matplotlib import font_manager
         
-        # Try language-specific font names
-        if language and language in _LANGUAGE_FONTS:
-            for font_file in _LANGUAGE_FONTS[language]:
-                font_name = os.path.splitext(font_file)[0].lower()
-                if font_name in all_fonts:
-                    _RTL_FONT_PATH = all_fonts[font_name]
-                    _register_font_with_matplotlib(_RTL_FONT_PATH)
-                    return _RTL_FONT_PATH, font_name
+        font_manager.fontManager.addfont(font_path)
+        prop = font_manager.FontProperties(fname=font_path)
+        font_name = prop.get_name()
         
-        # Try preferred font names
-        for name in _PREFERRED_FONT_NAMES:
-            if name.lower() in all_fonts:
-                _RTL_FONT_PATH = all_fonts[name.lower()]
-                _register_font_with_matplotlib(_RTL_FONT_PATH)
-                return _RTL_FONT_PATH, name
-    except Exception:
-        pass
-
-    # 3) Try to find any RTL font in system
-    try:
-        import matplotlib.font_manager as fm
-        rtl_keywords = ['arabic', 'urdu', 'nastaliq', 'hebrew', 'persian', 'pashto', 'sindhi']
-        for font in fm.fontManager.ttflist:
-            font_lower = font.name.lower()
-            if any(keyword in font_lower for keyword in rtl_keywords):
-                _RTL_FONT_PATH = font.fname
-                _register_font_with_matplotlib(_RTL_FONT_PATH)
-                return _RTL_FONT_PATH, font.name
-    except Exception:
-        pass
-
-    # 4) Final fallback: Use system default
-    try:
-        import matplotlib.pyplot as plt
-        plt.rcParams['font.family'] = ['DejaVu Sans', 'Arial', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False
-    except Exception:
-        pass
-
-    warnings.warn(
-        f"No RTL font found for language '{language}'. "
-        f"Place font files in the 'fonts/' directory of the package. "
-        f"Using system fallback.",
-        UserWarning, stacklevel=3,
-    )
-    return None, "default"
-
-
-def get_rtl_font_path(language: str = None) -> str | None:
-    """Get the RTL font path (public API)."""
-    font_path, _ = _find_rtl_font(language)
-    return font_path
+        mpl.rcParams['font.family'] = font_name
+        mpl.rcParams['axes.unicode_minus'] = False
+        mpl.rcParams['text.color'] = 'black'
+        mpl.rcParams['axes.labelcolor'] = 'black'
+        mpl.rcParams['xtick.color'] = 'black'
+        mpl.rcParams['ytick.color'] = 'black'
+        
+        return True
+    except Exception as e:
+        return False
 
 
 def set_rtl_font_path(font_path: str) -> bool:
     """Set a custom RTL font path."""
-    global _RTL_FONT_PATH
+    global _RTL_FONT_PATH, _FONT_REGISTERED
+    
     if not os.path.isfile(font_path):
-        print(f"[ERROR] Font not found: {font_path}")
         return False
     
     _RTL_FONT_PATH = font_path
-    return _register_font_with_matplotlib(font_path)
-
-
-# ============================================================================
-# AUTO-INITIALIZATION
-# ============================================================================
-
-def _auto_initialize():
-    """Auto-initialize RTL font support on import."""
+    
     try:
-        font_path, font_name = _find_rtl_font()
-        if font_path:
-            print(f"[INFO] RTL font initialized: {font_name}")
-        else:
-            print("[INFO] No RTL font found. RTL text may not render correctly.")
-            print("[INFO] Supported fonts for each language:")
-            for lang in _RTL_LANGUAGES.keys():
-                fonts = _LANGUAGE_FONTS.get(lang, [])
-                if fonts:
-                    print(f"  - {lang}: {fonts[0]}")
+        import matplotlib as mpl
+        from matplotlib import font_manager
+        
+        font_manager.fontManager.addfont(font_path)
+        prop = font_manager.FontProperties(fname=font_path)
+        font_name = prop.get_name()
+        
+        mpl.rcParams['font.family'] = font_name
+        mpl.rcParams['axes.unicode_minus'] = False
+        mpl.rcParams['text.color'] = 'black'
+        mpl.rcParams['axes.labelcolor'] = 'black'
+        mpl.rcParams['xtick.color'] = 'black'
+        mpl.rcParams['ytick.color'] = 'black'
+        
+        _FONT_REGISTERED = True
+        return True
     except Exception as e:
-        print(f"[WARNING] Auto-initialization failed: {e}")
+        return False
 
 
-# Run auto-initialization
-_auto_initialize()
+def get_rtl_font_path(language: str = None) -> str | None:
+    """Get the RTL font path for a specific language."""
+    font_path, _ = _find_rtl_font(language)
+    return font_path
 
 
 # ============================================================================
-# RTL TEXT DETECTION AND PROCESSING
+# RTL TEXT DETECTION
 # ============================================================================
+
+HEBREW_RANGE = (0x0590, 0x05FF)
+ARABIC_RANGES = [
+    (0x0600, 0x06FF),
+    (0x0750, 0x077F),
+    (0x08A0, 0x08FF),
+    (0xFB50, 0xFDFF),
+    (0xFE70, 0xFEFF),
+]
 
 def is_rtl_text(text: str) -> bool:
-    """
-    True if the string contains any RTL codepoints.
-    Supports all RTL languages.
-    """
     if not isinstance(text, str):
         return False
     for ch in text:
         cp = ord(ch)
-        for start, end in _RTL_RANGES:
+        if HEBREW_RANGE[0] <= cp <= HEBREW_RANGE[1]:
+            return True
+        for start, end in ARABIC_RANGES:
             if start <= cp <= end:
                 return True
     return False
 
 
 def detect_language(text: str) -> str:
-    """
-    Detect the likely RTL language of the text.
-    
-    Returns
-    -------
-    str
-        Language name or "unknown"
-    """
     if not is_rtl_text(text):
         return "unknown"
-    
-    # Hebrew has a distinct range
-    hebrew_range = (0x0590, 0x05FF)
     for ch in text:
         cp = ord(ch)
-        if hebrew_range[0] <= cp <= hebrew_range[1]:
+        if HEBREW_RANGE[0] <= cp <= HEBREW_RANGE[1]:
             return "Hebrew"
-    
-    # Check for Arabic script languages (most use Arabic script)
-    # This is a simplified detection
-    return "Arabic"  # Default to Arabic for Arabic script
+    return "Arabic"
 
 
-def process_label(text: str, force_rtl: bool = False) -> str:
-    """Return the label unchanged – reshaping is handled at render time."""
-    return str(text) if not isinstance(text, str) else text
-
-
-def reshape_rtl(text: str) -> str:
-    """
-    Return a reshaped/display-ordered string for RTL languages.
-
-    Uses `arabic_reshaper` + `python-bidi` if available; otherwise returns
-    the original text unchanged.
-    """
+def is_hebrew(text: str) -> bool:
     if not isinstance(text, str):
-        return text
-    try:
-        import arabic_reshaper
-        from bidi.algorithm import get_display
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except Exception:
-        return text
-
-
-def process_labels(labels, force_rtl: bool = False):
-    return [process_label(str(lbl)) for lbl in labels]
+        return False
+    for ch in text:
+        if HEBREW_RANGE[0] <= ord(ch) <= HEBREW_RANGE[1]:
+            return True
+    return False
 
 
 # ============================================================================
-# HARFBUZZ + FREETYPE RENDERER
+# RENDER FUNCTIONS - COMPLETELY FIXED FOR ALL LANGUAGES
 # ============================================================================
-
-_HB_OK = False
-_FT_OK = False
-
-try:
-    import uharfbuzz as hb
-    _HB_OK = True
-except ImportError:
-    pass
-
-try:
-    import freetype as ft
-    _FT_OK = True
-except ImportError:
-    pass
-
 
 def render_rtl_label(
     text: str,
     font_path: str,
     font_size_pt: float = 13,
     dpi: int = 150,
+    color: str = "black"
 ) -> Image.Image:
-    """
-    Render *text* using HarfBuzz shaping + FreeType rasterisation.
-
-    Returns an RGBA PIL Image with transparent background and black ink.
-    Falls back to a blank 1×1 image if shaping libraries are unavailable.
-    """
-    if not (_HB_OK and _FT_OK):
-        if not _HB_OK:
-            warnings.warn("uharfbuzz not installed – RTL labels will be plain text. "
-                          "Run: pip install uharfbuzz", UserWarning, stacklevel=2)
-        if not _FT_OK:
-            warnings.warn("freetype-py not installed – RTL labels will be plain text. "
-                          "Run: pip install freetype-py", UserWarning, stacklevel=2)
+    """Render RTL text using HarfBuzz + FreeType. Falls back to PIL if needed."""
+    if not text or not isinstance(text, str):
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-
-    import uharfbuzz as hb
-    import freetype as ft
-
-    px_per_pt = dpi / 72.0
-    px_size   = font_size_pt * px_per_pt
-    ft_size   = int(px_size * 64)
-
-    # ── HarfBuzz shaping ──────────────────────────────────────────────────────
-    blob    = hb.Blob.from_file_path(font_path)
-    face_hb = hb.Face(blob)
-    hb_font = hb.Font(face_hb)
-    hb_font.scale = (int(px_size * 64), int(px_size * 64))
-
-    buf = hb.Buffer()
-    buf.add_str(text)
-    buf.guess_segment_properties()
-    hb.shape(hb_font, buf)
-
-    infos     = buf.glyph_infos
-    positions = buf.glyph_positions
-
-    # ── FreeType rasterisation ────────────────────────────────────────────────
-    face_ft = ft.Face(font_path)
-    face_ft.set_char_size(ft_size)
-
-    total_adv = sum(abs(p.x_advance) for p in positions) // 64 + 10
-    h = int(px_size * 3.2)
-    w = max(int(total_adv) + 10, 10)
-
-    canvas   = np.zeros((h, w, 4), dtype=np.uint8)
-    baseline = int(h * 0.6)
-    x = 4
-
-    for info, pos in zip(infos, positions):
-        gid = info.codepoint
+    
+    try:
+        import uharfbuzz as hb
+        import freetype as ft
+        
+        px_per_pt = dpi / 72.0
+        px_size = font_size_pt * px_per_pt
+        ft_size = int(px_size * 64)
+        
+        blob = hb.Blob.from_file_path(font_path)
+        face_hb = hb.Face(blob)
+        hb_font = hb.Font(face_hb)
+        hb_font.scale = (int(px_size * 64), int(px_size * 64))
+        
+        buf = hb.Buffer()
+        buf.add_str(text)
+        buf.guess_segment_properties()
+        hb.shape(hb_font, buf)
+        
+        infos = buf.glyph_infos
+        positions = buf.glyph_positions
+        
+        face_ft = ft.Face(font_path)
+        face_ft.set_char_size(ft_size)
+        
+        total_adv = sum(abs(p.x_advance) for p in positions) // 64 + 10
+        h = int(px_size * 3.2)
+        w = max(int(total_adv) + 10, 10)
+        
+        canvas = np.zeros((h, w, 4), dtype=np.uint8)
+        baseline = int(h * 0.6)
+        x = 4
+        
+        import matplotlib.colors as mcolors
         try:
-            face_ft.load_glyph(gid, ft.FT_LOAD_RENDER)
-        except Exception:
-            x += abs(pos.x_advance) // 64
-            continue
-
-        bm = face_ft.glyph.bitmap
-        if bm.width > 0 and bm.rows > 0:
-            arr  = np.frombuffer(bytes(bm.buffer), dtype=np.uint8).reshape(bm.rows, bm.width)
-            bx   = x + pos.x_offset // 64 + face_ft.glyph.bitmap_left
-            by   = baseline - face_ft.glyph.bitmap_top - pos.y_offset // 64
-            x1, y1 = max(bx, 0), max(by, 0)
-            x2, y2 = min(bx + bm.width, w), min(by + bm.rows, h)
-            ax1 = x1 - bx;  ay1 = y1 - by
-            ax2 = ax1 + (x2 - x1); ay2 = ay1 + (y2 - y1)
-            if ax2 > ax1 and ay2 > ay1:
-                canvas[y1:y2, x1:x2, 3] = np.maximum(
-                    canvas[y1:y2, x1:x2, 3], arr[ay1:ay2, ax1:ax2]
-                )
-
-        x += abs(pos.x_advance) // 64
-
-    # trim transparent rows/cols
-    alpha = canvas[:, :, 3]
-    rows  = np.any(alpha > 0, axis=1)
-    cols  = np.any(alpha > 0, axis=0)
-    if rows.any() and cols.any():
-        r0, r1 = np.where(rows)[0][[0, -1]]
-        c0, c1 = np.where(cols)[0][[0, -1]]
-        pad = 3
-        canvas = canvas[max(r0 - pad, 0):r1 + pad + 1,
-                        max(c0 - pad, 0):c1 + pad + 1]
-
-    return Image.fromarray(canvas, "RGBA")
-
-
-def _render_latin_with_freetype(
-    text: str,
-    font_size_pt: float = 12,
-    dpi: int = 150,
-) -> Image.Image:
-    """Render plain LTR/ASCII text using FreeType with a Latin system font."""
-    if not _FT_OK:
-        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-
-    latin_font = _find_latin_font()
-    if latin_font is None:
-        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-
-    import freetype as ft
-
-    px_per_pt = dpi / 72.0
-    px_size   = font_size_pt * px_per_pt
-    ft_size   = int(px_size * 64)
-
-    face = ft.Face(latin_font)
-    face.set_char_size(ft_size)
-
-    total_adv = 0
-    for ch in text:
-        try:
-            face.load_char(ch, ft.FT_LOAD_DEFAULT)
-            total_adv += face.glyph.advance.x >> 6
-        except Exception:
-            total_adv += int(px_size * 0.5)
-
-    h = int(px_size * 2.2)
-    w = max(int(total_adv) + 10, 10)
-    canvas   = np.zeros((h, w, 4), dtype=np.uint8)
-    baseline = int(h * 0.68)
-    x = 2
-
-    for ch in text:
-        try:
-            face.load_char(ch, ft.FT_LOAD_RENDER)
-            bm = face.glyph.bitmap
+            rgb = mcolors.to_rgb(color)
+            text_rgb = (int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+        except:
+            text_rgb = (0, 0, 0)
+        
+        for info, pos in zip(infos, positions):
+            gid = info.codepoint
+            try:
+                face_ft.load_glyph(gid, ft.FT_LOAD_RENDER)
+            except Exception:
+                x += abs(pos.x_advance) // 64
+                continue
+            
+            bm = face_ft.glyph.bitmap
             if bm.width > 0 and bm.rows > 0:
-                arr  = np.frombuffer(bytes(bm.buffer), dtype=np.uint8).reshape(bm.rows, bm.width)
-                bx   = x + face.glyph.bitmap_left
-                by   = baseline - face.glyph.bitmap_top
+                arr = np.frombuffer(bytes(bm.buffer), dtype=np.uint8).reshape(bm.rows, bm.width)
+                bx = x + pos.x_offset // 64 + face_ft.glyph.bitmap_left
+                by = baseline - face_ft.glyph.bitmap_top - pos.y_offset // 64
                 x1, y1 = max(bx, 0), max(by, 0)
                 x2, y2 = min(bx + bm.width, w), min(by + bm.rows, h)
-                ax1 = x1 - bx; ay1 = y1 - by
-                ax2 = ax1 + (x2 - x1); ay2 = ay1 + (y2 - y1)
+                ax1 = x1 - bx
+                ay1 = y1 - by
+                ax2 = ax1 + (x2 - x1)
+                ay2 = ay1 + (y2 - y1)
                 if ax2 > ax1 and ay2 > ay1:
-                    canvas[y1:y2, x1:x2, 3] = np.maximum(
-                        canvas[y1:y2, x1:x2, 3], arr[ay1:ay2, ax1:ax2]
-                    )
-            x += face.glyph.advance.x >> 6
+                    for i in range(ay1, ay2):
+                        for j in range(ax1, ax2):
+                            if arr[i, j] > 0:
+                                alpha_val = arr[i, j]
+                                canvas[y1 + (i - ay1), x1 + (j - ax1), 0] = text_rgb[0]
+                                canvas[y1 + (i - ay1), x1 + (j - ax1), 1] = text_rgb[1]
+                                canvas[y1 + (i - ay1), x1 + (j - ax1), 2] = text_rgb[2]
+                                canvas[y1 + (i - ay1), x1 + (j - ax1), 3] = alpha_val
+            
+            x += abs(pos.x_advance) // 64
+        
+        alpha = canvas[:, :, 3]
+        rows = np.any(alpha > 0, axis=1)
+        cols = np.any(alpha > 0, axis=0)
+        if rows.any() and cols.any():
+            r0, r1 = np.where(rows)[0][[0, -1]]
+            c0, c1 = np.where(cols)[0][[0, -1]]
+            pad = 3
+            canvas = canvas[max(r0 - pad, 0):r1 + pad + 1,
+                           max(c0 - pad, 0):c1 + pad + 1]
+        
+        return Image.fromarray(canvas, "RGBA")
+        
+    except (ImportError, Exception):
+        try:
+            from PIL import ImageDraw, ImageFont
+            img = Image.new("RGBA", (200, 50), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            try:
+                font = ImageFont.truetype(font_path, int(font_size_pt))
+                draw.text((5, 5), text, font=font, fill=(0, 0, 0, 255))
+                bbox = img.getbbox()
+                if bbox:
+                    img = img.crop(bbox)
+                return img
+            except Exception:
+                pass
         except Exception:
-            x += int(px_size * 0.5)
-
-    alpha = canvas[:, :, 3]
-    rows  = np.any(alpha > 0, axis=1)
-    cols  = np.any(alpha > 0, axis=0)
-    if rows.any() and cols.any():
-        r0, r1 = np.where(rows)[0][[0, -1]]
-        c0, c1 = np.where(cols)[0][[0, -1]]
-        pad = 2
-        canvas = canvas[max(r0 - pad, 0):r1 + pad + 1,
-                        max(c0 - pad, 0):c1 + pad + 1]
-
-    return Image.fromarray(canvas, "RGBA")
+            pass
+        
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
 
 def render_mixed_label(
     text: str,
     font_path: str,
-    font_size_pt: float = 12,
+    font_size_pt: float = 13,
     dpi: int = 150,
+    color: str = "black"
 ) -> Image.Image:
     """
-    Render a label that contains both LTR and RTL parts.
+    Render a mixed label that may contain both LTR and RTL text.
+    CRITICAL FIX: Only render ONCE, no duplicates.
     """
-    if " = " in text:
-        ltr_part, rtl_part = text.split(" = ", 1)
-        if is_rtl_text(rtl_part):
-            ltr_img = _render_latin_with_freetype(ltr_part + " = ", font_size_pt, dpi)
-            rtl_img = render_rtl_label(rtl_part, font_path, font_size_pt, dpi)
+    if not text or not isinstance(text, str):
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    
+    # Check if text contains RTL characters
+    has_rtl = is_rtl_text(text)
+    
+    # If no RTL, render as LTR with PIL
+    if not has_rtl:
+        return render_ltr_text(text, font_size_pt, dpi, color)
+    
+    # Check if it's a mixed label with '=' separator
+    if '=' in text:
+        parts = text.split('=')
+        if len(parts) == 2:
+            ltr_part = parts[0].strip()
+            rtl_part = parts[1].strip()
+            
+            # Only render RTL part if it actually contains RTL text
+            if is_rtl_text(rtl_part):
+                # Render LTR prefix
+                ltr_img = render_ltr_text(ltr_part + " = ", font_size_pt, dpi, color)
+                # Render RTL part
+                rtl_img = render_rtl_label(rtl_part, font_path, font_size_pt, dpi, color)
+                
+                # Combine images
+                total_width = ltr_img.width + rtl_img.width + 2
+                max_height = max(ltr_img.height, rtl_img.height)
+                combined = Image.new("RGBA", (total_width, max_height), (0, 0, 0, 0))
+                combined.paste(ltr_img, (0, (max_height - ltr_img.height) // 2))
+                combined.paste(rtl_img, (ltr_img.width + 2, (max_height - rtl_img.height) // 2))
+                return combined
+            else:
+                # RTL part is not actually RTL, render entire thing as LTR
+                return render_ltr_text(text, font_size_pt, dpi, color)
+    
+    # Pure RTL text
+    return render_rtl_label(text, font_path, font_size_pt, dpi, color)
 
-            if ltr_img.width < 2 and rtl_img.width < 2:
-                return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
-            h = max(ltr_img.height, rtl_img.height, 1)
-            w = ltr_img.width + rtl_img.width
-            combined = Image.new("RGBA", (max(w, 1), h), (0, 0, 0, 0))
-            combined.paste(ltr_img, (0, (h - ltr_img.height) // 2))
-            if rtl_img.width >= 2:
-                combined.paste(
-                    rtl_img,
-                    (ltr_img.width, (h - rtl_img.height) // 2),
-                    rtl_img,
-                )
-            return combined
+def render_ltr_text(
+    text: str,
+    font_size_pt: float = 13,
+    dpi: int = 150,
+    color: str = "black"
+) -> Image.Image:
+    """Render LTR text using PIL."""
+    try:
+        from PIL import ImageDraw, ImageFont
+        import matplotlib.colors as mcolors
+        
+        # Try to use a standard font
+        font = None
+        for font_name in ["Arial", "Helvetica", "DejaVuSans", "sans-serif"]:
+            try:
+                font = ImageFont.truetype(font_name, int(font_size_pt))
+                break
+            except:
+                continue
+        
+        if font is None:
+            font = ImageFont.load_default()
+        
+        # Calculate text size
+        temp_img = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+        temp_draw = ImageDraw.Draw(temp_img)
+        bbox = temp_draw.textbbox((0, 0), text, font=font)
+        width = bbox[2] - bbox[0] + 10
+        height = bbox[3] - bbox[1] + 10
+        
+        # Create image
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Convert color
+        try:
+            rgb = mcolors.to_rgb(color)
+            text_color = (int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255), 255)
+        except:
+            text_color = (0, 0, 0, 255)
+        
+        # Draw text
+        draw.text((2, 2), text, font=font, fill=text_color)
+        
+        # Crop to text
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+        
+        return img
+    except Exception as e:
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
-    return render_rtl_label(text, font_path, font_size_pt, dpi)
 
+# ============================================================================
+# RTL PLOT UTILITIES - FIXED TO AVOID DUPLICATES
+# ============================================================================
 
-def add_rtl_title(text: str, ax=None, font_size_pt: float = 14,
-                  dpi: int = 150, pad: float = 15):
-    """
-    Place a HarfBuzz-rendered RTL title centered above the axes.
-    """
+def apply_rtl_ytick_images(
+    ax,
+    tick_labels,
+    font_path,
+    font_size_pt=13,
+    dpi=150,
+    ha="right",
+    color="black",
+    x_offset_pts=-6
+):
+    """Replace y-axis text tick labels with RTL-rendered images."""
     import matplotlib.pyplot as plt
     from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+    
+    if not tick_labels or not font_path:
+        return
+    
+    fig = ax.figure
+    fig.canvas.draw()
+    
+    yticks = ax.get_yticks()
+    ylim = ax.get_ylim()
+    ylim_lo = min(ylim) - 0.5
+    ylim_hi = max(ylim) + 0.5
+    
+    if isinstance(tick_labels, np.ndarray):
+        tick_labels = tick_labels.tolist()
+    
+    # Track which positions already have rendered labels to avoid duplicates
+    rendered_positions = set()
+    
+    for ytick_pos, label_text in zip(yticks, tick_labels):
+        # Skip if not RTL text
+        if not is_rtl_text(str(label_text)):
+            continue
+        
+        # Skip if out of bounds
+        if not (ylim_lo <= ytick_pos <= ylim_hi):
+            continue
+        
+        # CRITICAL FIX: Skip if we already rendered at this position
+        pos_rounded = round(ytick_pos, 6)
+        if pos_rounded in rendered_positions:
+            continue
+        
+        # Determine if mixed label
+        if '=' in str(label_text):
+            img_pil = render_mixed_label(
+                str(label_text),
+                font_path,
+                font_size_pt=font_size_pt,
+                dpi=dpi,
+                color=color
+            )
+        else:
+            img_pil = render_rtl_label(
+                str(label_text),
+                font_path,
+                font_size_pt=font_size_pt,
+                dpi=dpi,
+                color=color
+            )
+        
+        if img_pil.size == (1, 1):
+            continue
+        
+        arr = np.array(img_pil, dtype=np.uint8).copy()
+        
+        # Apply color if not black
+        if color != "black" and color != "#000000":
+            import matplotlib.colors as mcolors
+            try:
+                rgb = mcolors.to_rgb(color)
+                for i in range(arr.shape[0]):
+                    for j in range(arr.shape[1]):
+                        if arr[i, j, 3] > 0:
+                            arr[i, j, 0] = int(rgb[0] * 255)
+                            arr[i, j, 1] = int(rgb[1] * 255)
+                            arr[i, j, 2] = int(rgb[2] * 255)
+            except Exception:
+                pass
+        
+        oi = OffsetImage(arr, zoom=72.0 / dpi)
+        oi.image.axes = ax
+        
+        ab = AnnotationBbox(
+            oi,
+            xy=(0, ytick_pos),
+            xycoords=("axes fraction", "data"),
+            xybox=(x_offset_pts, 0),
+            boxcoords="offset points",
+            frameon=False,
+            box_alignment=(1.0, 0.5),
+            pad=0,
+        )
+        ax.add_artist(ab)
+        
+        # Mark this position as rendered
+        rendered_positions.add(pos_rounded)
 
+
+def hide_rtl_text_ticks(ax, tick_labels):
+    """Make the original text y-tick labels invisible for any RTL entries."""
+    if not tick_labels:
+        return
+    
+    text_ticks = ax.get_yticklabels()
+    for txt, label_text in zip(text_ticks, tick_labels):
+        if is_rtl_text(str(label_text)):
+            txt.set_visible(False)
+
+
+def _adjust_left_margin_for_rtl_labels(
+    ax,
+    tick_labels,
+    font_path,
+    font_size_pt=12,
+    dpi=150,
+    extra_pad_in=0.20
+):
+    """Widen the figure left margin so RTL y-tick images don't get cropped."""
+    if not tick_labels:
+        return
+    
+    rtl_labels = [str(lbl) for lbl in tick_labels if is_rtl_text(str(lbl))]
+    if not rtl_labels:
+        return
+    
+    max_px = 0
+    for lbl in rtl_labels:
+        try:
+            img = render_rtl_label(lbl, font_path, font_size_pt=font_size_pt, dpi=dpi)
+            max_px = max(max_px, img.size[0])
+        except:
+            continue
+    
+    if max_px < 2:
+        return
+    
+    fig = ax.figure
+    fig_dpi = fig.dpi
+    fig_w_in = fig.get_size_inches()[0]
+    label_w_in = (max_px * 72.0 / dpi) / fig_dpi
+    needed_left = (label_w_in + extra_pad_in) / fig_w_in
+    
+    if needed_left > fig.subplotpars.left:
+        fig.subplots_adjust(left=min(needed_left, 0.55))
+
+
+def add_rtl_title(
+    text: str,
+    ax=None,
+    font_size_pt: float = 14,
+    dpi: int = 150,
+    pad: float = 15,
+    color: str = "black"
+):
+    """Place a HarfBuzz-rendered RTL title centered above the axes."""
+    import matplotlib.pyplot as plt
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+    
     if ax is None:
         ax = plt.gca()
-
+    
+    if not text:
+        return
+    
     font_path, _ = _find_rtl_font()
     if font_path is None:
-        ax.set_title(text, fontsize=font_size_pt)
+        ax.set_title(text, fontsize=font_size_pt, color=color)
         return
-
-    img_pil = render_rtl_label(text, font_path, font_size_pt=font_size_pt, dpi=dpi)
+    
+    img_pil = render_rtl_label(
+        text,
+        font_path,
+        font_size_pt=font_size_pt,
+        dpi=dpi,
+        color=color
+    )
     if img_pil.width < 2:
-        ax.set_title(text, fontsize=font_size_pt)
+        ax.set_title(text, fontsize=font_size_pt, color=color)
         return
-
+    
     arr = np.array(img_pil, dtype=np.uint8)
     oi = OffsetImage(arr, zoom=72.0 / dpi)
     oi.image.axes = ax
-
+    
     ab = AnnotationBbox(
         oi,
         xy=(0.5, 1.0),
@@ -774,144 +817,48 @@ def add_rtl_title(text: str, ax=None, font_size_pt: float = 14,
     ax.add_artist(ab)
 
 
-def apply_rtl_ytick_images(
-    ax,
-    tick_labels: list[str],
-    font_path: str,
-    font_size_pt: float = 13,
-    dpi: int = 150,
-    ha: str = "right",
-    color: str = "black",
-    x_offset_pts: float = -6,
-):
-    """
-    Replace y-axis text tick labels that contain RTL characters with
-    properly-shaped images rendered via HarfBuzz+FreeType.
-    """
-    import matplotlib.pyplot as plt
-    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+# ============================================================================
+# AUTO-INITIALIZATION
+# ============================================================================
 
-    fig = ax.figure
-    fig.canvas.draw()
-
-    yticks = ax.get_yticks()
-    ylim   = ax.get_ylim()
-    ylim_lo = min(ylim) - 0.5
-    ylim_hi = max(ylim) + 0.5
-
-    for ytick_pos, label_text in zip(yticks, tick_labels):
-        if not is_rtl_text(label_text):
-            continue
-
-        if not (ylim_lo <= ytick_pos <= ylim_hi):
-            continue
-
-        img_pil = render_rtl_label(label_text, font_path,
-                                   font_size_pt=font_size_pt, dpi=dpi)
-        if img_pil.size == (1, 1):
-            continue
-
-        arr = np.array(img_pil, dtype=np.uint8).copy()
-        if color != "black" and color != "#000000":
-            import matplotlib.colors as mcolors
-            rgb = mcolors.to_rgb(color)
-            arr[:, :, 0] = int(rgb[0] * 255)
-            arr[:, :, 1] = int(rgb[1] * 255)
-            arr[:, :, 2] = int(rgb[2] * 255)
-
-        oi = OffsetImage(arr, zoom=72.0 / dpi)
-        oi.image.axes = ax
-
-        ab = AnnotationBbox(
-            oi,
-            xy=(0, ytick_pos),
-            xycoords=("axes fraction", "data"),
-            xybox=(-8, 0),
-            boxcoords="offset points",
-            frameon=False,
-            box_alignment=(1.0, 0.5),
-            pad=0,
-        )
-        ax.add_artist(ab)
-
-    _adjust_left_margin_for_rtl_labels(ax, tick_labels, font_path,
-                                       font_size_pt=font_size_pt, dpi=dpi)
+def _auto_initialize():
+    """Auto-initialize RTL font support."""
+    try:
+        import matplotlib as mpl
+        mpl.rcParams['text.color'] = 'black'
+        mpl.rcParams['axes.labelcolor'] = 'black'
+        mpl.rcParams['xtick.color'] = 'black'
+        mpl.rcParams['ytick.color'] = 'black'
+    except:
+        pass
+    
+    print("[INFO] RTL font support ready.")
+    print("[INFO] Supported languages: Arabic, Urdu, Persian, Hebrew")
 
 
-def _adjust_left_margin_for_rtl_labels(
-    ax,
-    tick_labels: list[str],
-    font_path: str,
-    font_size_pt: float = 12,
-    dpi: int = 150,
-    extra_pad_in: float = 0.20,
-):
-    """Widen the figure left margin so RTL y-tick images don't get cropped."""
-    rtl_labels = [lbl for lbl in tick_labels if is_rtl_text(lbl)]
-    if not rtl_labels:
-        return
-
-    max_px = max(
-        render_rtl_label(lbl, font_path, font_size_pt=font_size_pt, dpi=dpi).size[0]
-        for lbl in rtl_labels
-    )
-    if max_px < 2:
-        return
-
-    fig = ax.figure
-    fig_dpi      = fig.dpi
-    fig_w_in     = fig.get_size_inches()[0]
-    label_w_in   = (max_px * 72.0 / dpi) / fig_dpi
-    needed_left  = (label_w_in + extra_pad_in) / fig_w_in
-
-    if needed_left > fig.subplotpars.left:
-        fig.subplots_adjust(left=min(needed_left, 0.55))
-
-
-def hide_rtl_text_ticks(ax, tick_labels: list[str]):
-    """
-    Make the original text y-tick labels invisible for any RTL entries.
-    This prevents the original matplotlib text labels from showing
-    behind the rendered RTL images.
-    """
-    text_ticks = ax.get_yticklabels()
-    for txt, label_text in zip(text_ticks, tick_labels):
-        if is_rtl_text(label_text):
-            txt.set_visible(False)
+# Run auto-initialization
+_auto_initialize()
 
 
 # ============================================================================
-# PUBLIC API - EXPORTED FUNCTIONS
+# EXPORTED FUNCTIONS
 # ============================================================================
 
 __all__ = [
-    # Font management
     '_find_rtl_font',
-    '_find_latin_font',
-    '_register_font_with_matplotlib',
-    'get_rtl_font_path',
     'set_rtl_font_path',
-    
-    # RTL detection
+    'get_rtl_font_path',
+    'set_current_language',
+    'get_current_language',
     'is_rtl_text',
     'detect_language',
-    'process_label',
-    'process_labels',
-    'reshape_rtl',
-    
-    # Rendering
+    'is_hebrew',
     'render_rtl_label',
     'render_mixed_label',
-    '_render_latin_with_freetype',
-    
-    # Plot utilities
+    'render_ltr_text',
     'apply_rtl_ytick_images',
     'hide_rtl_text_ticks',
     '_adjust_left_margin_for_rtl_labels',
     'add_rtl_title',
-    
-    # Constants
-    '_RTL_LANGUAGES',
-    '_RTL_RANGES',
     '_LANGUAGE_FONTS',
 ]
