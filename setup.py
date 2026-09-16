@@ -27,7 +27,7 @@ setup(
         "pandas>=1.3.0",
         "arabic-reshaper>=3.0.0",
         "python-bidi>=0.4.2",
-        # Part B: LLM explainer dependencies (reused from URDU Lime package)
+        # Part B: LLM explainer dependencies 
         "langchain-openai>=0.1.0",
         "python-dotenv>=1.0.0",
     ],

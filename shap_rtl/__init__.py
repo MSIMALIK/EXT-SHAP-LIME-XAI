@@ -23,16 +23,25 @@ Or the module-style import that matches the package naming convention:
     from shap_rtl.plots import waterfall as shap_rtl_force_plot
     shap_rtl_force_plot(shap_values)
 
-Named-module import (as requested)
+Named-module import 
 -----------------------------------
     import shap_rtl.plots as shap_rtl_force  # plot accessible as shap_rtl_force.plot
     shap_rtl_force.waterfall(shap_values)
+
+Easy-to-use wrapper for all languages
+-----------------------------------
+    from shap_rtl import SHAPRTL
+    
+    # For any language: Arabic, Urdu, Hebrew, Persian
+    analyzer = SHAPRTL(language="Hebrew")
+    analyzer.train(texts, labels)
+    analyzer.analyze("שלום עולם", plot_type='bar')
 
 Version
 -------
 """
 
-__version__ = "1.1.0"
+__version__ = "1.0.0"
 __author__ = "SHAP_RTL contributors"
 
 from . import plots
@@ -48,6 +57,11 @@ from .plots import (
     heatmap,
 )
 from .explainer import RTLSHAPExplainer
+
+# ============================================================
+# IMPORT THE WRAPPER
+# ============================================================
+from .wrapper import SHAPRTL, create_analyzer
 
 # Convenience alias so users can do:
 #   import shap_rtl.plots as shap_rtl_force
@@ -67,5 +81,7 @@ __all__ = [
     "heatmap",
     "plot",
     "RTLSHAPExplainer",
+    "SHAPRTL",           
+    "create_analyzer",   
     "__version__",
 ]
