@@ -91,18 +91,7 @@ SHAP is widely used to explain model behavior in NLP research, including work on
 
 Issues and pull requests are welcome. If you run into a script or font that isn't handled correctly, please open an issue with a minimal reproducible example.
 
-## Citation
 
-If you use SHAP RTL in academic work, please cite it as:
-
-```bibtex
-@software{shap_rtl,
-  title  = {SHAP RTL: Right-to-left aware SHAP plots for Urdu and Arabic},
-  author = {{SHAP RTL contributors}},
-  year   = {2026},
-  url    = {https://github.com/<your-username>/SHAP_RTL_package}
-}
-```
 
 ## License
 
