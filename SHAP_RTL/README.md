@@ -9,7 +9,7 @@ SHAP RTL solves this. It provides drop-in replacements for every major `shap.plo
 The package also includes an LLM-based explainer that converts raw SHAP values into a natural-language explanation of a model's prediction, written directly in Urdu or Arabic rather than translated after the fact.
 
 ## Installation
-
+ 
 SHAP RTL can be installed from source:
 
 ```bash
